@@ -119,14 +119,28 @@ class StockProvider extends ChangeNotifier {
     return list;
   }
 
-  void setSelectedGroup(BranchGroup group) {
+  Future<void> setSelectedGroup(BranchGroup group) async {
     _selectedGroup = group;
-    // Filter branches belonging to group
-    final groupBranches = _branches.where((b) => b.groupId == group.id || b.groupName == group.name).toList();
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      final fetchedBranches = await _apiService.getBranches(groupId: group.id);
+      if (fetchedBranches.isNotEmpty) {
+        _branches = fetchedBranches;
+      } else {
+        // Keep existing branches if API returned empty
+      }
+    } catch (_) {}
+
+    _isLoading = false;
+    final groupBranches = _branches.where((b) => b.groupId == group.id || (b.groupName != null && b.groupName!.contains(group.name))).toList();
     if (groupBranches.isNotEmpty) {
       _selectedBranch = groupBranches.first;
+    } else if (_branches.isNotEmpty) {
+      _selectedBranch = _branches.first;
     }
-    fetchProducts();
+    await fetchProducts();
   }
 
   void setSelectedBranch(Branch branch) {

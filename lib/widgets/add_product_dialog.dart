@@ -16,18 +16,16 @@ class _AddProductDialogState extends State<AddProductDialog> {
   final TextEditingController _brandController = TextEditingController();
   final TextEditingController _itemNameController = TextEditingController();
 
-  final Map<String, bool> _branchCheckmarks = {
-    'Al Rawabi Group': false,
-    'Safari Group': false,
-    'Saudia Group': true,
-    'Grand Mall': false,
-    'Retail Mart': false,
-    'Ansar Gallery': false,
-    'Ramez Group': false,
-    'Family Food Centre': false,
-    'Global Max Trdg': false,
-    'Paris Hypermarket': false,
-  };
+  final Map<String, bool> _branchCheckmarks = {};
+
+  @override
+  void initState() {
+    super.initState();
+    final stockProvider = Provider.of<StockProvider>(context, listen: false);
+    for (var g in stockProvider.groups) {
+      _branchCheckmarks[g.name] = false;
+    }
+  }
 
   @override
   void dispose() {

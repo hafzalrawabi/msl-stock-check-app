@@ -140,15 +140,18 @@ class _TodayUpdatesScreenState extends State<TodayUpdatesScreen> {
           child: Row(
             children: [
               _buildFilterChip('Group: $_selectedGroup', () {
-                _showSelectDialog('Select Group', ['All groups', 'Al Rawabi Group', 'Saudia Group'], _selectedGroup, (val) => setState(() => _selectedGroup = val));
+                final groupOptions = ['All groups', ...stockProvider.groups.map((g) => g.name)];
+                _showSelectDialog('Select Group', groupOptions, _selectedGroup, (val) => setState(() => _selectedGroup = val));
               }),
               const SizedBox(width: 8),
               _buildFilterChip('Outlet: $_selectedOutlet', () {
-                _showSelectDialog('Select Outlet', ['All outlets', 'GHMK', 'RHMR', 'SAUDI MAITHER'], _selectedOutlet, (val) => setState(() => _selectedOutlet = val));
+                final outletOptions = ['All outlets', ...stockProvider.branches.map((b) => b.name)];
+                _showSelectDialog('Select Outlet', outletOptions, _selectedOutlet, (val) => setState(() => _selectedOutlet = val));
               }),
               const SizedBox(width: 8),
               _buildFilterChip('Brand: $_selectedBrand', () {
-                _showSelectDialog('Select Brand', ['All brands', 'FIVE GROUP', 'Choice Food Factory'], _selectedBrand, (val) => setState(() => _selectedBrand = val));
+                final brandOptions = ['All brands', ...stockProvider.products.map((p) => p.brand).toSet().where((b) => b.isNotEmpty)];
+                _showSelectDialog('Select Brand', brandOptions, _selectedBrand, (val) => setState(() => _selectedBrand = val));
               }),
             ],
           ),
