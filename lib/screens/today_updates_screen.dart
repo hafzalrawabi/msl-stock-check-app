@@ -1,7 +1,8 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide DateRangePickerDialog;
 import 'package:provider/provider.dart';
 import '../providers/stock_provider.dart';
 import '../services/export_service.dart';
+import '../widgets/date_range_picker_dialog.dart';
 
 class TodayUpdatesScreen extends StatefulWidget {
   const TodayUpdatesScreen({super.key});
@@ -15,6 +16,20 @@ class _TodayUpdatesScreenState extends State<TodayUpdatesScreen> {
   String _selectedGroup = 'All groups';
   String _selectedOutlet = 'All outlets';
   String _selectedBrand = 'All brands';
+
+  void _showDatePicker() async {
+    final stockProvider = Provider.of<StockProvider>(context, listen: false);
+    final result = await showDialog<DateRangeResult>(
+      context: context,
+      builder: (_) => DateRangePickerDialog(
+        initialFromDate: stockProvider.selectedDate,
+        initialToDate: stockProvider.selectedDate,
+      ),
+    );
+    if (result != null) {
+      stockProvider.setSelectedDate(result.fromDate);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -51,18 +66,25 @@ class _TodayUpdatesScreenState extends State<TodayUpdatesScreen> {
                       Text('Stock activity feed', style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8))),
                     ],
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white12,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Row(
-                      children: [
-                        Icon(Icons.calendar_today_rounded, size: 12, color: Colors.white),
-                        SizedBox(width: 4),
-                        Text('Thu, Sep 24', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
-                      ],
+                  InkWell(
+                    onTap: _showDatePicker,
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white12,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.calendar_today_rounded, size: 12, color: Colors.white),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${stockProvider.selectedDate.day}/${stockProvider.selectedDate.month}/${stockProvider.selectedDate.year}',
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],

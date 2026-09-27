@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/letter_loader.dart';
+import '../widgets/shimmer_loader.dart';
 import 'main_navigation_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -12,7 +14,7 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _usernameController = TextEditingController(text: 'admin');
-  final TextEditingController _passwordController = TextEditingController(text: 'admin');
+  final TextEditingController _passwordController = TextEditingController(text: '123');
   final _formKey = GlobalKey<FormState>();
   bool _obscurePassword = true;
 
@@ -99,17 +101,31 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Column(
                       children: [
                         Container(
-                          width: 56,
-                          height: 56,
+                          width: 68,
+                          height: 68,
+                          padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.15),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white30, width: 1.5),
-                          ),
-                          child: const Icon(
-                            Icons.inventory_2_rounded,
                             color: Colors.white,
-                            size: 28,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF4F46E5).withValues(alpha: 0.4),
+                                blurRadius: 16,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(34),
+                            child: Image.asset(
+                              'assets/images/app_icon.png',
+                              fit: BoxFit.contain,
+                              errorBuilder: (context, error, stackTrace) => const Icon(
+                                Icons.inventory_2_rounded,
+                                color: Color(0xFF4F46E5),
+                                size: 32,
+                              ),
+                            ),
                           ),
                         ),
                         const SizedBox(height: 14),
@@ -245,10 +261,28 @@ class _LoginScreenState extends State<LoginScreen> {
                                 shadowColor: const Color(0xFF4F46E5).withValues(alpha: 0.4),
                               ),
                               child: auth.isLoading
-                                  ? const SizedBox(
-                                      width: 22,
-                                      height: 22,
-                                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                                  ? const ShimmerLoader(
+                                      baseColor: Color(0xFF818CF8),
+                                      highlightColor: Colors.white,
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          SizedBox(
+                                            width: 24,
+                                            height: 24,
+                                            child: LetterLoader(size: 20, text: ''),
+                                          ),
+                                          SizedBox(width: 10),
+                                          Text(
+                                            'Authenticating...',
+                                            style: TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     )
                                   : const Row(
                                       mainAxisAlignment: MainAxisAlignment.center,

@@ -14,7 +14,7 @@ class DashboardProvider extends ChangeNotifier {
 
   List<Product> _matrixProducts = [];
   bool _isLoading = false;
-  DateTime _selectedDate = DateTime(2026, 9, 24);
+  DateTime _selectedDate = DateTime.now();
 
   DashboardSummary get summary => _summary;
   List<BranchGroup> get groups => _groups;

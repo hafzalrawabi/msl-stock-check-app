@@ -20,12 +20,41 @@ class StockProvider extends ChangeNotifier {
   String _searchQuery = '';
   String _selectedBrand = 'All Brands';
   String _sortBy = 'Default (SL No.)';
+  String _selectedStatus = 'All Status';
   bool _isLoading = false;
   bool _hasUnsavedChanges = false;
 
   // Getters
   List<BranchGroup> get groups => _groups;
   List<Branch> get branches => _branches;
+
+  List<Branch> get filteredBranches {
+    if (_selectedGroup == null) return _branches;
+
+    final String cleanGroupName = _selectedGroup!.name
+        .replaceAll(RegExp(r'\s*\(\d+\)'), '')
+        .trim()
+        .toLowerCase();
+
+    final groupBranches = _branches.where((b) {
+      if (b.groupId != null && b.groupId == _selectedGroup!.id) {
+        return true;
+      }
+      if (b.groupName != null && b.groupName!.isNotEmpty) {
+        final cleanBranchGroup = b.groupName!
+            .replaceAll(RegExp(r'\s*\(\d+\)'), '')
+            .trim()
+            .toLowerCase();
+        if (cleanBranchGroup == cleanGroupName || cleanBranchGroup.contains(cleanGroupName) || cleanGroupName.contains(cleanBranchGroup)) {
+          return true;
+        }
+      }
+      return false;
+    }).toList();
+
+    return groupBranches.isNotEmpty ? groupBranches : _branches;
+  }
+
   List<Product> get products => _filteredProducts;
   List<StockUpdateItem> get updates => _updates;
   DashboardSummary get dashboardSummary => _dashboardSummary;
@@ -37,8 +66,20 @@ class StockProvider extends ChangeNotifier {
   String get searchQuery => _searchQuery;
   String get selectedBrand => _selectedBrand;
   String get sortBy => _sortBy;
+  String get selectedStatus => _selectedStatus;
   bool get isLoading => _isLoading;
   bool get hasUnsavedChanges => _hasUnsavedChanges;
+
+  List<String> get availableBrands {
+    final set = <String>{};
+    for (var p in _products) {
+      if (p.brand.trim().isNotEmpty) {
+        set.add(p.brand.trim());
+      }
+    }
+    final list = set.toList()..sort();
+    return ['All Brands', ...list];
+  }
 
   StockProvider() {
     initData();
@@ -46,45 +87,89 @@ class StockProvider extends ChangeNotifier {
 
   Future<void> initData() async {
     _isLoading = true;
+    _selectedDate = DateTime.now();
     notifyListeners();
 
+    debugPrint('\n[FETCH DATA] Initializing dashboard & stock data...');
     try {
-      _groups = await _apiService.getBranchGroups();
-      _branches = await _apiService.getBranches();
-
-      if (_groups.isNotEmpty) {
-        _selectedGroup = _groups.firstWhere(
-          (g) => g.name.contains('Saudia'),
-          orElse: () => _groups.first,
-        );
+      final bootstrap = await _apiService.getBranchesBootstrap();
+      if (bootstrap.isNotEmpty) {
+        if (bootstrap['groups'] is List) {
+          _groups = (bootstrap['groups'] as List).map((e) => BranchGroup.fromJson(e)).toList();
+        }
+        if (bootstrap['branches'] is List) {
+          _branches = (bootstrap['branches'] as List).map((e) => Branch.fromJson(e)).toList();
+        } else if (bootstrap['outlets'] is List) {
+          _branches = (bootstrap['outlets'] as List).map((e) => Branch.fromJson(e)).toList();
+        }
       }
 
-      if (_branches.isNotEmpty) {
-        _selectedBranch = _branches.firstWhere(
-          (b) => b.name.contains('MAITHER'),
-          orElse: () => _branches.first,
-        );
+      if (_groups.isEmpty) {
+        _groups = await _apiService.getBranchGroups();
+      }
+      if (_branches.isEmpty) {
+        _branches = await _apiService.getBranches();
       }
 
-      await fetchProducts();
-    } catch (_) {}
+      debugPrint('[FETCH DATA] Loaded ${_groups.length} groups and ${_branches.length} branches.');
+
+      if (_groups.isNotEmpty && _selectedGroup == null) {
+        _selectedGroup = _groups.first;
+      }
+
+      final availableBranches = filteredBranches;
+      if (availableBranches.isNotEmpty) {
+        _selectedBranch = availableBranches.first;
+      } else if (_branches.isNotEmpty) {
+        _selectedBranch = _branches.first;
+      }
+
+      if (_selectedBranch != null) {
+        await fetchProducts();
+      }
+    } catch (e) {
+      debugPrint('[FETCH DATA ERROR] Exception during initData: $e');
+    }
 
     _isLoading = false;
     notifyListeners();
   }
 
-  Future<void> fetchProducts() async {
-    _isLoading = true;
-    notifyListeners();
+  final Map<int, List<Product>> _branchCache = {};
+
+  Future<void> fetchProducts({bool showLoader = true}) async {
+    final branchId = _selectedBranch?.id;
+    final hasCachedData = branchId != null && _branchCache.containsKey(branchId);
+
+    // If cached products exist, show them immediately without blocking UI
+    if (hasCachedData && _products.isEmpty) {
+      _products = List.from(_branchCache[branchId]!);
+      notifyListeners();
+    }
+
+    if (!hasCachedData && showLoader && _products.isEmpty) {
+      _isLoading = true;
+      notifyListeners();
+    }
+
+    debugPrint('\n[FETCH DATA] Requesting product catalogue for Branch ID: $branchId (${_selectedBranch?.name})...');
 
     try {
-      _products = await _apiService.getProducts(
-        branchId: _selectedBranch?.id,
+      final fetched = await _apiService.getProducts(
+        branchId: branchId,
         search: _searchQuery,
         brand: _selectedBrand,
         sortBy: _sortBy,
       );
-    } catch (_) {}
+
+      _products = fetched;
+      if (branchId != null) {
+        _branchCache[branchId] = List.from(fetched);
+      }
+      debugPrint('[FETCH DATA SUCCESS] Received ${_products.length} products for ${_selectedBranch?.name}');
+    } catch (e) {
+      debugPrint('[FETCH DATA ERROR] Error fetching products: $e');
+    }
 
     _isLoading = false;
     _hasUnsavedChanges = false;
@@ -108,6 +193,14 @@ class StockProvider extends ChangeNotifier {
       list = list.where((p) => p.brand.toLowerCase() == _selectedBrand.toLowerCase()).toList();
     }
 
+    if (_selectedStatus == 'Available') {
+      list = list.where((p) => p.isAvailable == true).toList();
+    } else if (_selectedStatus == 'Not Available') {
+      list = list.where((p) => p.isAvailable == false).toList();
+    } else if (_selectedStatus == 'Pending') {
+      list = list.where((p) => p.isAvailable == null).toList();
+    }
+
     if (_sortBy == 'A to Z') {
       list.sort((a, b) => a.itemName.compareTo(b.itemName));
     } else if (_sortBy == 'Z to A') {
@@ -119,8 +212,17 @@ class StockProvider extends ChangeNotifier {
     return list;
   }
 
+  void applyFilters({String? brand, String? sort, String? status}) {
+    if (brand != null) _selectedBrand = brand;
+    if (sort != null) _sortBy = sort;
+    if (status != null) _selectedStatus = status;
+    notifyListeners();
+  }
+
   Future<void> setSelectedGroup(BranchGroup group) async {
+    if (_selectedGroup?.id == group.id) return;
     _selectedGroup = group;
+    _products.clear();
     _isLoading = true;
     notifyListeners();
 
@@ -128,24 +230,34 @@ class StockProvider extends ChangeNotifier {
       final fetchedBranches = await _apiService.getBranches(groupId: group.id);
       if (fetchedBranches.isNotEmpty) {
         _branches = fetchedBranches;
-      } else {
-        // Keep existing branches if API returned empty
       }
     } catch (_) {}
 
-    _isLoading = false;
-    final groupBranches = _branches.where((b) => b.groupId == group.id || (b.groupName != null && b.groupName!.contains(group.name))).toList();
-    if (groupBranches.isNotEmpty) {
-      _selectedBranch = groupBranches.first;
+    final availableBranches = filteredBranches;
+    if (availableBranches.isNotEmpty) {
+      _selectedBranch = availableBranches.first;
     } else if (_branches.isNotEmpty) {
       _selectedBranch = _branches.first;
+    } else {
+      _selectedBranch = null;
     }
+
     await fetchProducts();
   }
 
   void setSelectedBranch(Branch branch) {
+    if (_selectedBranch?.id == branch.id) return;
     _selectedBranch = branch;
-    fetchProducts();
+    
+    // Show cached branch data instantly if available
+    if (_branchCache.containsKey(branch.id)) {
+      _products = List.from(_branchCache[branch.id]!);
+      notifyListeners();
+      fetchProducts(showLoader: false);
+    } else {
+      _products.clear();
+      fetchProducts(showLoader: true);
+    }
   }
 
   void setSelectedDate(DateTime date) {
@@ -195,15 +307,22 @@ class StockProvider extends ChangeNotifier {
     notifyListeners();
 
     if (_selectedBranch != null) {
+      final updateFutures = <Future>[];
       for (var p in _products) {
         if (p.isAvailable != null) {
-          await _apiService.updateStockCheck(
-            productId: p.id,
-            branchId: _selectedBranch!.id,
-            isAvailable: p.isAvailable!,
-            remarks: p.remarks,
+          updateFutures.add(
+            _apiService.updateStockCheck(
+              productId: p.id,
+              branchId: _selectedBranch!.id,
+              isAvailable: p.isAvailable!,
+              remarks: p.remarks,
+            ),
           );
         }
+      }
+      // Execute all pending stock updates concurrently in parallel for maximum speed
+      if (updateFutures.isNotEmpty) {
+        await Future.wait(updateFutures);
       }
     }
 

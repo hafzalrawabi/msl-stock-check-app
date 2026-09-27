@@ -7,6 +7,10 @@ class Product {
   bool? isAvailable; // true: Available, false: Not Available, null: Pending / N/A
   String? remarks;
   String? erpStock;
+  final int shelfStock;
+  final int backStock;
+  final int totalStock;
+  final String unit;
   final List<String> groups;
   final List<int> branchIds;
   bool isVisible;
@@ -20,6 +24,10 @@ class Product {
     this.isAvailable,
     this.remarks,
     this.erpStock,
+    this.shelfStock = 0,
+    this.backStock = 0,
+    this.totalStock = 0,
+    this.unit = 'PC',
     this.groups = const [],
     this.branchIds = const [],
     this.isVisible = true,
@@ -27,14 +35,15 @@ class Product {
 
   factory Product.fromJson(Map<String, dynamic> json) {
     bool? avail;
-    if (json['is_available'] != null) {
-      if (json['is_available'] is bool) {
-        avail = json['is_available'];
-      } else if (json['is_available'] == 1 || json['is_available'] == '1' || json['is_available'] == 'true') {
-        avail = true;
-      } else if (json['is_available'] == 0 || json['is_available'] == '0' || json['is_available'] == 'false') {
+    if (json['is_available'] != null || json['status'] != null) {
+      final raw = json['is_available'] ?? json['status'];
+      if (raw == false || raw == 0 || raw == '0' || raw == 'false' || raw == 'Not Available' || raw == 'NOT AVAILABLE') {
         avail = false;
+      } else if (raw == true || raw == 1 || raw == '1' || raw == 'true' || raw == 'Available' || raw == 'AVAILABLE') {
+        avail = true;
       }
+    } else {
+      avail = true; // Default to Available if not explicitly marked unavailable
     }
 
     List<String> parsedGroups = [];
@@ -49,15 +58,38 @@ class Product {
       parsedBranchIds = (json['branch_ids'] as List).map((e) => int.tryParse(e.toString()) ?? 0).toList();
     }
 
+    int parseInt(dynamic v) {
+      if (v == null) return 0;
+      if (v is int) return v;
+      if (v is double) return v.toInt();
+      return int.tryParse(v.toString()) ?? 0;
+    }
+
+    Map<String, dynamic>? ebtMap;
+    if (json['ebt_stock'] is Map) {
+      ebtMap = Map<String, dynamic>.from(json['ebt_stock']);
+    } else if (json['ebtStock'] is Map) {
+      ebtMap = Map<String, dynamic>.from(json['ebtStock']);
+    }
+
+    final shelfVal = ebtMap != null ? ebtMap['location_stock'] : (json['shelf_stock'] ?? json['shelf'] ?? json['shelfStock']);
+    final backVal = ebtMap != null ? ebtMap['back_store_stock'] : (json['back_stock'] ?? json['back'] ?? json['backStock']);
+    final totalVal = ebtMap != null ? ebtMap['total_stock'] : (json['total_stock'] ?? json['total'] ?? json['totalStock'] ?? json['erp_stock']);
+    final unitVal = ebtMap != null ? ebtMap['uom'] : (json['unit'] ?? json['uom']);
+
     return Product(
       id: json['id'] is int ? json['id'] : int.tryParse(json['id']?.toString() ?? '0') ?? 0,
-      slNo: json['sl_no'] is int ? json['sl_no'] : int.tryParse(json['sl_no']?.toString() ?? '0') ?? 0,
+      slNo: parseInt(json['sl_no'] ?? json['sl'] ?? json['slNo']),
       barcode: json['barcode']?.toString() ?? '',
       brand: json['brand']?.toString() ?? '',
-      itemName: json['item_name']?.toString() ?? json['name']?.toString() ?? 'Product',
+      itemName: json['item_name']?.toString() ?? json['name']?.toString() ?? json['itemName']?.toString() ?? 'Product',
       isAvailable: avail,
-      remarks: json['remarks']?.toString(),
-      erpStock: json['erp_stock']?.toString() ?? 'n/a',
+      remarks: json['remarks']?.toString() ?? json['remark']?.toString(),
+      erpStock: (totalVal ?? json['erp_stock'] ?? '0').toString(),
+      shelfStock: parseInt(shelfVal),
+      backStock: parseInt(backVal),
+      totalStock: parseInt(totalVal),
+      unit: unitVal?.toString() ?? 'PC',
       groups: parsedGroups,
       branchIds: parsedBranchIds,
       isVisible: json['is_visible'] == true || json['is_visible'] == 1 || json['is_visible'] == null,
@@ -74,6 +106,10 @@ class Product {
       'is_available': isAvailable,
       'remarks': remarks,
       'erp_stock': erpStock,
+      'shelf_stock': shelfStock,
+      'back_stock': backStock,
+      'total_stock': totalStock,
+      'unit': unit,
       'groups': groups,
       'branch_ids': branchIds,
       'is_visible': isVisible,

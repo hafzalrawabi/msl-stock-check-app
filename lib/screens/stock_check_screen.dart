@@ -3,8 +3,14 @@ import 'package:provider/provider.dart';
 import '../models/branch.dart';
 import '../models/product.dart';
 import '../providers/stock_provider.dart';
+import '../services/api_service.dart';
+import '../services/excel_service.dart';
 import '../widgets/barcode_scanner_dialog.dart';
 import '../widgets/filter_dialog.dart';
+import '../widgets/group_selection_modal.dart';
+import '../widgets/letter_loader.dart';
+import '../widgets/outlet_selection_modal.dart';
+import '../widgets/remarks_upload_dialog.dart';
 
 class StockCheckScreen extends StatefulWidget {
   const StockCheckScreen({super.key});
@@ -21,6 +27,8 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
     _searchController.dispose();
     super.dispose();
   }
+
+  final ApiService _apiService = ApiService();
 
   void _openBarcodeScanner() async {
     final provider = Provider.of<StockProvider>(context, listen: false);
@@ -41,36 +49,158 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
     );
   }
 
-  void _openRemarksDialog(Product product) {
-    final controller = TextEditingController(text: product.remarks ?? '');
+  void _openStockCheckDetail(Product product) async {
+    final stockProvider = Provider.of<StockProvider>(context, listen: false);
+    final branch = stockProvider.selectedBranch;
+    final branchId = branch?.id ?? 0;
+
+    // Fetch detail from GET /api/stock/check/:productId/:branchId/detail
+    Map<String, dynamic> detail = {};
+    if (branchId > 0) {
+      detail = await _apiService.getStockCheckDetail(product.id, branchId);
+    }
+
+    final erpStock = detail['erp_stock'] ?? detail['erpStock'] ?? product.erpStock;
+    final remarksText = detail['remarks']?.toString() ?? product.remarks ?? '';
+    final isAvail = detail['is_available'] == true || detail['isAvailable'] == true || product.isAvailable == true;
+    final isNotAvail = detail['is_available'] == false || detail['isAvailable'] == false || product.isAvailable == false;
+
+    if (!mounted) return;
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Remarks - ${product.itemName}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-        content: TextField(
-          controller: controller,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            hintText: 'Enter remarks about stock availability...',
-          ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(8)),
+              child: const Icon(Icons.info_outline_rounded, color: Color(0xFF4F46E5), size: 20),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                product.itemName,
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: Column(
+                children: [
+                  _buildDetailRow('Outlet', branch?.name ?? 'Default Branch'),
+                  const SizedBox(height: 6),
+                  _buildDetailRow('Barcode', product.barcode),
+                  const SizedBox(height: 6),
+                  _buildDetailRow('SL No', '#${product.slNo}'),
+                  const SizedBox(height: 6),
+                  _buildDetailRow('Brand', product.brand),
+                  const SizedBox(height: 6),
+                  _buildDetailRow('ERP Stock', '$erpStock units'),
+                  const SizedBox(height: 6),
+                  _buildDetailRow(
+                    'Status',
+                    isAvail ? 'AVAILABLE' : isNotAvail ? 'NOT AVAILABLE' : 'PENDING',
+                    color: isAvail ? const Color(0xFF10B981) : isNotAvail ? const Color(0xFFEF4444) : const Color(0xFFF59E0B),
+                  ),
+                ],
+              ),
+            ),
+            if (remarksText.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Text('Remarks:', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B))),
+              const SizedBox(height: 4),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: const Color(0xFFFFFBEB), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFFDE68A))),
+                child: Text(remarksText, style: const TextStyle(fontSize: 11, color: Color(0xFF92400E))),
+              ),
+            ],
+          ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel', style: TextStyle(color: Color(0xFF64748B))),
+            child: const Text('Close', style: TextStyle(color: Color(0xFF64748B))),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4F46E5)),
             onPressed: () {
-              Provider.of<StockProvider>(context, listen: false).updateProductRemarks(product.id, controller.text);
               Navigator.of(ctx).pop();
+              _openRemarksDialog(product);
             },
-            child: const Text('Save Remark'),
+            child: const Text('Edit Remarks'),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildDetailRow(String label, String val, {Color? color}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+        Text(val, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color ?? const Color(0xFF0F172A))),
+      ],
+    );
+  }
+
+  Widget _buildStockPill(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$label ',
+            style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Color(0xFF94A3B8)),
+          ),
+          Text(
+            value,
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: color),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openRemarksDialog(Product product) async {
+    final stockProvider = Provider.of<StockProvider>(context, listen: false);
+    final branchId = stockProvider.selectedBranch?.id ?? 0;
+
+    final updated = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => RemarksUploadDialog(
+        product: product,
+        branchId: branchId,
+      ),
+    );
+
+    if (updated == true) {
+      stockProvider.fetchProducts(showLoader: false);
+    }
   }
 
   @override
@@ -93,6 +223,8 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
                   Expanded(child: _buildBranchDropdown(stockProvider)),
                   const SizedBox(width: 8),
                   _buildFilterButton(),
+                  const SizedBox(width: 8),
+                  _buildExcelReportButton(stockProvider),
                 ],
               ),
               const SizedBox(height: 12),
@@ -155,31 +287,50 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
 
         // Product Stock List Section
         Expanded(
-          child: stockProvider.isLoading
-              ? const Center(child: CircularProgressIndicator(color: Color(0xFF4F46E5)))
-              : stockProvider.products.isEmpty
-                  ? Container(
-                      padding: const EdgeInsets.all(24),
-                      child: const Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.inventory_rounded, size: 40, color: Color(0xFF94A3B8)),
-                            SizedBox(height: 8),
-                            Text('No products found in branch.', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                      ),
-                    )
-                  : ListView.separated(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: stockProvider.products.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 12),
-                      itemBuilder: (ctx, index) {
-                        final p = stockProvider.products[index];
-                        return _buildMobileStockCard(p, stockProvider);
-                      },
+          child: RefreshIndicator(
+            color: const Color(0xFF4F46E5),
+            onRefresh: () async {
+              await stockProvider.fetchProducts();
+            },
+            child: stockProvider.isLoading
+                ? const SingleChildScrollView(
+                    physics: AlwaysScrollableScrollPhysics(),
+                    child: SizedBox(
+                      height: 400,
+                      child: Center(child: LetterLoader(text: 'Loading stock catalogue...')),
                     ),
+                  )
+                : stockProvider.products.isEmpty
+                    ? SingleChildScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        child: Container(
+                          height: 400,
+                          padding: const EdgeInsets.all(24),
+                          child: const Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.inventory_rounded, size: 40, color: Color(0xFF94A3B8)),
+                                SizedBox(height: 8),
+                                Text('No products found in branch.', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
+                                SizedBox(height: 4),
+                                Text('Pull down to refresh stock list', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.all(16),
+                        itemCount: stockProvider.products.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 12),
+                        itemBuilder: (ctx, index) {
+                          final p = stockProvider.products[index];
+                          return _buildMobileStockCard(p, stockProvider);
+                        },
+                      ),
+          ),
         ),
 
         // Bottom Save / Discard Bar
@@ -233,7 +384,7 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
                           }
                         : null,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: stockProvider.hasUnsavedChanges ? const Color(0xFF10B981) : const Color(0xFF334155),
+                      backgroundColor:   const Color(0xFF10B981) ,
                       elevation: 0,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -270,28 +421,42 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
       children: [
         const Text('GROUP', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF64748B))),
         const SizedBox(height: 4),
-        Container(
-          height: 38,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
-            border: Border.all(color: const Color(0xFFCBD5E1)),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<BranchGroup>(
-              isExpanded: true,
-              value: provider.selectedGroup,
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
-              items: provider.groups.map((g) {
-                return DropdownMenuItem<BranchGroup>(
-                  value: g,
-                  child: Text(g.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                );
-              }).toList(),
-              onChanged: (val) {
-                if (val != null) provider.setSelectedGroup(val);
-              },
+        InkWell(
+          onTap: () async {
+            final selected = await showModalBottomSheet<BranchGroup>(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: Colors.transparent,
+              builder: (_) => GroupSelectionModal(
+                groups: provider.groups,
+                selectedGroup: provider.selectedGroup,
+              ),
+            );
+            if (selected != null) {
+              provider.setSelectedGroup(selected);
+            }
+          },
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            height: 38,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              border: Border.all(color: const Color(0xFFCBD5E1)),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    provider.selectedGroup?.name ?? 'Select Group',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: Color(0xFF64748B)),
+              ],
             ),
           ),
         ),
@@ -300,33 +465,53 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
   }
 
   Widget _buildBranchDropdown(StockProvider provider) {
+    final availableBranches = provider.filteredBranches;
+    Branch? currentBranch = provider.selectedBranch;
+    if (availableBranches.isNotEmpty && (currentBranch == null || !availableBranches.any((b) => b.id == currentBranch!.id))) {
+      currentBranch = availableBranches.first;
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text('OUTLET', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF64748B))),
         const SizedBox(height: 4),
-        Container(
-          height: 38,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
-            border: Border.all(color: const Color(0xFFCBD5E1)),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<Branch>(
-              isExpanded: true,
-              value: provider.selectedBranch,
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
-              items: provider.branches.map((b) {
-                return DropdownMenuItem<Branch>(
-                  value: b,
-                  child: Text(b.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                );
-              }).toList(),
-              onChanged: (val) {
-                if (val != null) provider.setSelectedBranch(val);
-              },
+        InkWell(
+          onTap: () async {
+            final selected = await showModalBottomSheet<Branch>(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: Colors.transparent,
+              builder: (_) => OutletSelectionModal(
+                branches: availableBranches,
+                selectedBranch: currentBranch,
+              ),
+            );
+            if (selected != null) {
+              provider.setSelectedBranch(selected);
+            }
+          },
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            height: 38,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              border: Border.all(color: const Color(0xFFCBD5E1)),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    currentBranch?.name ?? 'Select Outlet',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: Color(0xFF64748B)),
+              ],
             ),
           ),
         ),
@@ -355,37 +540,81 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
     );
   }
 
-  Widget _buildMobileStockCard(Product p, StockProvider provider) {
-    final isAvail = p.isAvailable == true;
-    final isNotAvail = p.isAvailable == false;
-
-    final cardBorderColor = isAvail
-        ? const Color(0xFF10B981)
-        : isNotAvail
-            ? const Color(0xFFEF4444)
-            : const Color(0xFFF1F5F9);
-
-    final cardBgColor = isAvail
-        ? const Color(0xFFECFDF5)
-        : isNotAvail
-            ? const Color(0xFFFEF2F2)
-            : Colors.white;
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: cardBgColor,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: cardBorderColor, width: isAvail || isNotAvail ? 1.5 : 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
+  Widget _buildExcelReportButton(StockProvider provider) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 14.0),
+      child: Container(
+        height: 38,
+        width: 38,
+        decoration: BoxDecoration(
+          color: const Color(0xFFECFDF5),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFA7F3D0)),
+        ),
+        child: IconButton(
+          icon: const Icon(Icons.table_view_rounded, color: Color(0xFF059669), size: 18),
+          onPressed: () async {
+            final messenger = ScaffoldMessenger.of(context);
+            messenger.showSnackBar(
+              const SnackBar(
+                backgroundColor: Color(0xFF059669),
+                content: Text('Generating Excel (.xlsx) Stock Report...'),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+            final success = await ExcelService.exportStockReport(
+              branch: provider.selectedBranch,
+              products: provider.products,
+              search: provider.searchQuery,
+              brand: provider.selectedBrand == 'All Brands' ? null : provider.selectedBrand,
+            );
+            if (!success && mounted) {
+              messenger.showSnackBar(
+                const SnackBar(
+                  backgroundColor: Color(0xFFEF4444),
+                  content: Text('Failed to generate Excel report.'),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          },
+          padding: EdgeInsets.zero,
+          tooltip: 'Export Excel (.xlsx) Report',
+        ),
       ),
-      child: Column(
+    );
+  }
+
+  Widget _buildMobileStockCard(Product p, StockProvider provider) {
+    final isNotAvail = p.isAvailable == false;
+    final isAvail = !isNotAvail;
+
+    final cardBorderColor = isNotAvail
+        ? const Color(0xFFFCA5A5)
+        : const Color(0xFF6EE7B7);
+
+    final cardBgColor = isNotAvail
+        ? const Color(0xFFFEF2F2)
+        : const Color(0xFFECFDF5);
+
+    return InkWell(
+      onTap: () => _openStockCheckDetail(p),
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: cardBgColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: cardBorderColor, width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.02),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // SL & Barcode row
@@ -404,19 +633,17 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: isAvail
-                      ? const Color(0xFFD1FAE5)
-                      : isNotAvail
-                          ? const Color(0xFFFEE2E2)
-                          : const Color(0xFFFEF3C7),
+                  color: isNotAvail
+                      ? const Color(0xFFFEE2E2)
+                      : const Color(0xFFD1FAE5),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
-                  isAvail ? 'AVAILABLE' : isNotAvail ? 'NOT AVAILABLE' : 'PENDING',
+                  isNotAvail ? 'NOT AVAILABLE' : 'AVAILABLE',
                   style: TextStyle(
                     fontSize: 9,
                     fontWeight: FontWeight.bold,
-                    color: isAvail ? const Color(0xFF047857) : isNotAvail ? const Color(0xFFB91C1C) : const Color(0xFFB45309),
+                    color: isNotAvail ? const Color(0xFFB91C1C) : const Color(0xFF047857),
                   ),
                 ),
               ),
@@ -429,9 +656,20 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
             p.itemName,
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
           ),
-          const SizedBox(height: 4),
-          Text('ERP Stock: ${p.erpStock}', style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
-          const SizedBox(height: 12),
+          const SizedBox(height: 6),
+          // Stock breakdown pills (TOTAL, SHELF, BACK, UNIT)
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _buildStockPill('TOTAL', '${p.totalStock > 0 ? p.totalStock : (p.erpStock ?? "0")}', const Color(0xFF334155)),
+              _buildStockPill('SHELF', '${p.shelfStock}', const Color(0xFF64748B)),
+              _buildStockPill('BACK', '${p.backStock}', const Color(0xFF64748B)),
+              _buildStockPill('UNIT', p.unit, const Color(0xFF4F46E5)),
+            ],
+          ),
+          const SizedBox(height: 10),
 
           // Toggle Action Buttons Row
           Row(
@@ -532,6 +770,7 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 }

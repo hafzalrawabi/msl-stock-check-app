@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import 'dashboard_screen.dart';
+import '../providers/theme_provider.dart';
 import 'stock_check_screen.dart';
-import 'today_updates_screen.dart';
-import 'products_screen.dart';
 import 'login_screen.dart';
 
 class MainNavigationScreen extends StatefulWidget {
@@ -15,26 +13,10 @@ class MainNavigationScreen extends StatefulWidget {
 }
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
-  int _currentIndex = 0;
-
-  final List<Widget> _screens = const [
-    DashboardScreen(),
-    TodayUpdatesScreen(),
-    ProductsScreen(),
-    StockCheckScreen(),
-  ];
-
-  final List<String> _titles = [
-    'Dashboard',
-    'Today Updates',
-    'Products Catalog',
-    'Stock Check',
-  ];
-
   void _handleLogout() {
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => AlertDialog(backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Confirm Logout', style: TextStyle(fontWeight: FontWeight.bold)),
         content: const Text('Are you sure you want to log out from MSL Stock Check?'),
@@ -45,7 +27,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFEF4444),
+              backgroundColor: const Color(0xFF00048B),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
             onPressed: () {
@@ -65,12 +47,21 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
+    final themeProvider = Provider.of<ThemeProvider>(context);
     final user = auth.user;
 
+    if (!auth.isAuthenticated) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+          );
+        }
+      });
+    }
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0F172A),
         elevation: 0,
         titleSpacing: 16,
         title: Row(
@@ -81,22 +72,22 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 color: const Color(0xFF4F46E5),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.inventory_2_rounded, size: 20, color: Colors.white),
+              child: const Icon(Icons.fact_check_rounded, size: 20, color: Colors.white),
             ),
             const SizedBox(width: 10),
-            Column(
+            const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _titles[_currentIndex],
-                  style: const TextStyle(
+                  'Stock Check',
+                  style: TextStyle(
                     color: Colors.white,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                const Text(
-                  'MSL Stock Check',
+                Text(
+                  'MSL Stock Check App',
                   style: TextStyle(
                     color: Color(0xFF94A3B8),
                     fontSize: 11,
@@ -107,11 +98,25 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: Icon(
+              themeProvider.isDarkMode ? Icons.wb_sunny_rounded : Icons.nightlight_round,
+              color: themeProvider.isDarkMode ? const Color(0xFFFBBF24) : const Color(0xFF94A3B8),
+            ),
+            tooltip: themeProvider.isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode',
+            onPressed: () => themeProvider.toggleTheme(),
+          ),
           PopupMenuButton<String>(
             offset: const Offset(0, 48),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
             onSelected: (val) {
-              if (val == 'logout') _handleLogout();
+              if (val == 'theme') {
+                themeProvider.toggleTheme();
+              } else if (val == 'logout') {
+                _handleLogout();
+              }
             },
             child: Padding(
               padding: const EdgeInsets.only(right: 16.0),
@@ -153,6 +158,23 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                   ],
                 ),
               ),
+              PopupMenuItem<String>(
+                value: 'theme',
+                child: Row(
+                  children: [
+                    Icon(
+                      themeProvider.isDarkMode ? Icons.wb_sunny_rounded : Icons.nightlight_round,
+                      color: themeProvider.isDarkMode ? const Color(0xFFFBBF24) : const Color(0xFF4F46E5),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      themeProvider.isDarkMode ? 'Light Mode' : 'Dark Mode',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
               const PopupMenuItem<String>(
                 value: 'logout',
                 child: Row(
@@ -167,61 +189,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 16,
-              offset: const Offset(0, -4),
-            ),
-          ],
-        ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            child: BottomNavigationBar(
-              currentIndex: _currentIndex,
-              onTap: (index) => setState(() => _currentIndex = index),
-              type: BottomNavigationBarType.fixed,
-              backgroundColor: Colors.transparent,
-              elevation: 0,
-              selectedItemColor: const Color(0xFF4F46E5),
-              unselectedItemColor: const Color(0xFF94A3B8),
-              selectedFontSize: 11,
-              unselectedFontSize: 11,
-              selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold),
-              items: const [
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.dashboard_rounded),
-                  activeIcon: Icon(Icons.dashboard_rounded, color: Color(0xFF4F46E5)),
-                  label: 'Dashboard',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.bolt_outlined),
-                  activeIcon: Icon(Icons.bolt_rounded, color: Color(0xFF4F46E5)),
-                  label: 'Today',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.inventory_2_outlined),
-                  activeIcon: Icon(Icons.inventory_2_rounded, color: Color(0xFF4F46E5)),
-                  label: 'Products',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.fact_check_outlined),
-                  activeIcon: Icon(Icons.fact_check_rounded, color: Color(0xFF4F46E5)),
-                  label: 'Stock Check',
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+      body: const StockCheckScreen(),
     );
   }
 }

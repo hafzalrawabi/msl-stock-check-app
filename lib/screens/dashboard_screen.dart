@@ -1,8 +1,9 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide DateRangePickerDialog;
 import 'package:provider/provider.dart';
 import '../models/branch.dart';
 import '../providers/stock_provider.dart';
 import '../services/export_service.dart';
+import '../widgets/date_range_picker_dialog.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -15,36 +16,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final ExportService _exportService = ExportService();
   String _selectedGroupFilter = '';
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _outletTableScrollController = ScrollController();
+  bool _showGroupBreakdown = false;
 
   @override
   void dispose() {
     _searchController.dispose();
+    _outletTableScrollController.dispose();
     super.dispose();
   }
 
   void _showDatePicker() async {
     final stockProvider = Provider.of<StockProvider>(context, listen: false);
-    final picked = await showDatePicker(
+    final result = await showDialog<DateRangeResult>(
       context: context,
-      initialDate: stockProvider.selectedDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2030),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.light(
-              primary: Color(0xFF4F46E5),
-              onPrimary: Colors.white,
-              onSurface: Color(0xFF0F172A),
-            ),
-          ),
-          child: child!,
-        );
-      },
+      builder: (_) => DateRangePickerDialog(
+        initialFromDate: stockProvider.selectedDate,
+        initialToDate: stockProvider.selectedDate,
+      ),
     );
-    if (picked != null) {
-      stockProvider.setSelectedDate(picked);
+    if (result != null) {
+      stockProvider.setSelectedDate(result.fromDate);
     }
+  }
+
+  String _formatDate(DateTime date) {
+    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final now = DateTime.now();
+    final isToday = date.year == now.year && date.month == now.month && date.day == now.day;
+    final dateStr = '${weekdays[date.weekday - 1]}, ${months[date.month - 1]} ${date.day}';
+    return isToday ? 'Today ($dateStr)' : dateStr;
   }
 
   @override
@@ -68,7 +70,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return _GroupStat(name: g.name, avail: a, notAvail: na, pending: p);
     }).toList();
 
-    final groupFilterOptions = groupList.map((g) => '${g.name} (${g.outletCount})').toList();
+    final groupFilterOptions = [
+      'All Branch Groups ($totalOutlets)',
+      ...groupList.map((g) => '${g.name} (${g.outletCount > 0 ? g.outletCount : branchList.where((b) => b.groupId == g.id || (b.groupName != null && b.groupName!.contains(g.name))).length})'),
+    ];
     if (_selectedGroupFilter.isEmpty && groupFilterOptions.isNotEmpty) {
       _selectedGroupFilter = groupFilterOptions.first;
     }
@@ -128,13 +133,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: Colors.white24),
                       ),
-                      child: const Row(
+                      child: Row(
                         children: [
-                          Icon(Icons.calendar_today_rounded, size: 14, color: Colors.white),
-                          SizedBox(width: 6),
+                          const Icon(Icons.calendar_today_rounded, size: 14, color: Colors.white),
+                          const SizedBox(width: 6),
                           Text(
-                            'Thu, Sep 24',
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                            _formatDate(stockProvider.selectedDate),
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
                           ),
                         ],
                       ),
@@ -259,8 +264,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
         // 3. Outlet Reports Main Card
         _buildOutletReportsCard(stockProvider),
+        const SizedBox(height: 20),
+
+        // 4. MT MSL Matrix Card
+        _buildMtMslMatrixCard(stockProvider),
+        const SizedBox(height: 20),
+
+        // 5. Outlet Stock Matrix Card
+        _buildOutletStockMatrixCard(stockProvider),
       ],
     );
+  }
+
+  double constraintsWidthFallback(double screenWidth) {
+    return screenWidth < 650 ? 650 : screenWidth - 64;
   }
 
   Widget _buildOutletReportsCard(StockProvider stockProvider) {
@@ -290,13 +307,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
           : BranchGroup(id: 0, name: selectedGroupCleanName.isEmpty ? 'Group' : selectedGroupCleanName, outletCount: 0, mslPerOutlet: 0),
     );
 
-    // Filter branches matching selected group and search query
     final query = _searchController.text.trim().toLowerCase();
+    final isAllGroups = selectedGroupCleanName.toLowerCase().startsWith('all');
+
     final selectedOutlets = branchList.where((b) {
-      final gName = (b.groupName ?? '').toLowerCase();
-      final clean = selectedGroupCleanName.toLowerCase();
-      if (clean.isNotEmpty && gName.isNotEmpty && !gName.contains(clean) && !clean.contains(gName)) {
-        return false;
+      if (!isAllGroups) {
+        bool matchesGroup = false;
+        if (selectedGroupObj.id != 0 && b.groupId == selectedGroupObj.id) {
+          matchesGroup = true;
+        } else if (b.groupName != null && b.groupName!.isNotEmpty) {
+          final gName = b.groupName!.toLowerCase();
+          final clean = selectedGroupCleanName.toLowerCase();
+          if (gName.contains(clean) || clean.contains(gName)) {
+            matchesGroup = true;
+          }
+        }
+        if (!matchesGroup) return false;
       }
       if (query.isNotEmpty && !b.name.toLowerCase().contains(query)) {
         return false;
@@ -304,14 +330,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return true;
     }).toList();
 
-    final outletCount = selectedOutlets.isNotEmpty ? selectedOutlets.length : selectedGroupObj.outletCount;
-    final mslPerOutlet = selectedOutlets.isNotEmpty
-        ? (selectedOutlets.map((e) => e.mslCount).fold(0, (a, b) => a + b) / selectedOutlets.length).round()
-        : selectedGroupObj.mslPerOutlet;
+    final outletCount = selectedOutlets.length;
+    final totalMsl = selectedOutlets.fold(0, (s, b) => s + b.mslCount);
+    final totalAvail = selectedOutlets.fold(0, (s, b) => s + b.availableCount);
+    final totalNotAvail = selectedOutlets.fold(0, (s, b) => s + b.notAvailableCount);
+    final totalPending = selectedOutlets.fold(0, (s, b) => s + b.pendingCount);
 
     // Calculate group status (NOT STARTED, IN PROGRESS, COMPLETED)
-    final totalAvail = selectedOutlets.fold(0, (s, b) => s + b.availableCount);
-    final totalPending = selectedOutlets.fold(0, (s, b) => s + b.pendingCount);
     String groupStatus = 'NOT STARTED';
     Color statusBg = const Color(0xFFFFFBEB);
     Color statusTextColor = const Color(0xFFD97706);
@@ -344,55 +369,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 1. Top Section Header with Title & Filters
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final isWide = constraints.maxWidth > 650;
-              return Column(
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Outlet Reports',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '$selectedGroupCleanName — $outletCount outlets',
-                            style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
-                          ),
-                        ],
-                      ),
-                      if (isWide)
-                        Row(
-                          children: [
-                            const Text('Outlet group', style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
-                            const SizedBox(width: 8),
-                            _buildGroupDropdown(groupOptions, stockProvider),
-                            const SizedBox(width: 10),
-                            _buildSearchBox(),
-                          ],
-                        ),
-                    ],
+                  const Text(
+                    'Outlet Reports',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
                   ),
-                  if (!isWide) ...[
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(child: _buildGroupDropdown(groupOptions, stockProvider)),
-                        const SizedBox(width: 8),
-                        Expanded(child: _buildSearchBox()),
-                      ],
-                    ),
-                  ],
+                  const SizedBox(height: 2),
+                  Text(
+                    '$selectedGroupCleanName — $outletCount outlets',
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                  ),
                 ],
-              );
-            },
+              ),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _buildGroupDropdown(groupOptions, stockProvider),
+                  _buildSearchBox(),
+                ],
+              ),
+            ],
           ),
           const SizedBox(height: 16),
 
@@ -404,33 +410,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: const Color(0xFFF1F5F9)),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      selectedGroupCleanName,
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                    Expanded(
+                      child: Text(
+                        selectedGroupCleanName,
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '$outletCount outlets · $mslPerOutlet MSL per outlet',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: statusBg,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        groupStatus,
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: statusTextColor),
+                      ),
                     ),
                   ],
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: statusBg,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    groupStatus,
-                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: statusTextColor),
-                  ),
+                const SizedBox(height: 4),
+                Text(
+                  '$outletCount Outlets · $totalMsl MSL Items',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF64748B)),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [
+                    _buildSmallStatBadge('$totalAvail Available', const Color(0xFF10B981), const Color(0xFFECFDF5)),
+                    _buildSmallStatBadge('$totalNotAvail N/A', const Color(0xFFEF4444), const Color(0xFFFEF2F2)),
+                    _buildSmallStatBadge('$totalPending Pending', const Color(0xFFF59E0B), const Color(0xFFFFFBEB)),
+                  ],
                 ),
               ],
             ),
@@ -478,8 +499,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               ),
                             )
                           : Scrollbar(
+                              controller: _outletTableScrollController,
                               thumbVisibility: true,
                               child: ListView.separated(
+                                controller: _outletTableScrollController,
                                 padding: EdgeInsets.zero,
                                 itemCount: selectedOutlets.length,
                                 separatorBuilder: (_, _) => const Divider(height: 1, color: Color(0xFFF1F5F9)),
@@ -570,8 +593,284 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  double constraintsWidthFallback(double screenWidth) {
-    return screenWidth < 650 ? 650 : screenWidth - 64;
+  // 4. MT MSL Matrix Card
+  Widget _buildMtMslMatrixCard(StockProvider stockProvider) {
+    final groupList = stockProvider.groups;
+    final productList = stockProvider.products;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'MT MSL Matrix',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Group-level product assignments · ${productList.length} products',
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.grid_on_rounded, color: Color(0xFF4F46E5), size: 18),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Search Box
+          SizedBox(
+            height: 38,
+            child: TextField(
+              onChanged: (val) => stockProvider.setSearchQuery(val),
+              decoration: InputDecoration(
+                hintText: 'Search by name, barcode, or SL...',
+                hintStyle: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+                prefixIcon: const Icon(Icons.search_rounded, size: 16, color: Color(0xFF64748B)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFCBD5E1))),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFCBD5E1))),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Matrix Table
+          Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFE2E8F0)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                height: 320,
+                child: SingleChildScrollView(
+                  child: DataTable(
+                    columnSpacing: 16,
+                    headingRowHeight: 40,
+                    dataRowMinHeight: 44,
+                    dataRowMaxHeight: 44,
+                    columns: [
+                      const DataColumn(label: Text('SL', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B)))),
+                      const DataColumn(label: Text('BARCODE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B)))),
+                      const DataColumn(label: Text('ITEM NAME', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B)))),
+                      ...groupList.map((g) => DataColumn(
+                        label: Text(
+                          g.name.replaceAll(RegExp(r'\s*\(\d+\)'), '').toUpperCase(),
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF4F46E5)),
+                        ),
+                      )),
+                    ],
+                    rows: productList.map((p) {
+                      return DataRow(
+                        cells: [
+                          DataCell(Text('${p.slNo}', style: const TextStyle(fontSize: 12))),
+                          DataCell(Text(p.barcode, style: const TextStyle(fontSize: 11, fontFamily: 'monospace'))),
+                          DataCell(Text(p.itemName, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
+                          ...groupList.map((g) {
+                            final cleanGName = g.name.replaceAll(RegExp(r'\s*\(\d+\)'), '').trim().toLowerCase();
+                            final isAssigned = p.groups.any((pg) => pg.toLowerCase().contains(cleanGName) || cleanGName.contains(pg.toLowerCase()));
+                            return DataCell(
+                              Center(
+                                child: isAssigned
+                                    ? const Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 16)
+                                    : const Text('-', style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold)),
+                              ),
+                            );
+                          }),
+                        ],
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Legend
+          const Row(
+            children: [
+              Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 14),
+              SizedBox(width: 4),
+              Text('In group MSL', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+              SizedBox(width: 16),
+              Text('-', style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 14)),
+              SizedBox(width: 4),
+              Text('blank = not assigned', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 5. Outlet Stock Matrix Card
+  Widget _buildOutletStockMatrixCard(StockProvider stockProvider) {
+    final branchList = stockProvider.branches;
+    final productList = stockProvider.products;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Outlet Stock Matrix',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Stock check status per branch · ${branchList.length} outlets · ${productList.length} products',
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.table_chart_rounded, color: Color(0xFF10B981), size: 18),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Search Box
+          SizedBox(
+            height: 38,
+            child: TextField(
+              onChanged: (val) => stockProvider.setSearchQuery(val),
+              decoration: InputDecoration(
+                hintText: 'Search by name, barcode, or SL...',
+                hintStyle: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+                prefixIcon: const Icon(Icons.search_rounded, size: 16, color: Color(0xFF64748B)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFCBD5E1))),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFCBD5E1))),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Matrix Table
+          Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFE2E8F0)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                height: 320,
+                child: SingleChildScrollView(
+                  child: DataTable(
+                    columnSpacing: 16,
+                    headingRowHeight: 40,
+                    dataRowMinHeight: 44,
+                    dataRowMaxHeight: 44,
+                    columns: [
+                      const DataColumn(label: Text('SL', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B)))),
+                      const DataColumn(label: Text('BARCODE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B)))),
+                      const DataColumn(label: Text('ITEM NAME', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B)))),
+                      ...branchList.map((b) => DataColumn(
+                        label: Text(
+                          b.name.toUpperCase(),
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                        ),
+                      )),
+                    ],
+                    rows: productList.map((p) {
+                      return DataRow(
+                        cells: [
+                          DataCell(Text('${p.slNo}', style: const TextStyle(fontSize: 12))),
+                          DataCell(Text(p.barcode, style: const TextStyle(fontSize: 11, fontFamily: 'monospace'))),
+                          DataCell(Text(p.itemName, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
+                          ...branchList.map((b) {
+                            final isAvail = p.isAvailable == true;
+                            final isNotAvail = p.isAvailable == false;
+                            return DataCell(
+                              Center(
+                                child: isAvail
+                                    ? const Icon(Icons.check_rounded, color: Color(0xFF10B981), size: 16)
+                                    : isNotAvail
+                                        ? const Icon(Icons.close_rounded, color: Color(0xFFEF4444), size: 16)
+                                        : const Text('-', style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold)),
+                              ),
+                            );
+                          }),
+                        ],
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Legend
+          const Row(
+            children: [
+              Icon(Icons.check_rounded, color: Color(0xFF10B981), size: 14),
+              SizedBox(width: 4),
+              Text('Available', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+              SizedBox(width: 12),
+              Icon(Icons.close_rounded, color: Color(0xFFEF4444), size: 14),
+              SizedBox(width: 4),
+              Text('Not Available', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+              SizedBox(width: 12),
+              Text('-', style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 14)),
+              SizedBox(width: 4),
+              Text('Pending', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildGroupDropdown(List<String> options, StockProvider stockProvider) {
@@ -691,6 +990,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // 1. Branch Groups Bar Chart & Statistics Card
   Widget _buildBranchGroupsBarChartCard(List<_GroupStat> groupStats) {
+    final totalA = groupStats.fold(0, (s, g) => s + g.avail);
+    final totalNA = groupStats.fold(0, (s, g) => s + g.notAvail);
+    final totalP = groupStats.fold(0, (s, g) => s + g.pending);
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -711,15 +1014,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Branch Groups Statistics',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
-                  ),
-                  Text('Item breakdown per market group', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
-                ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Branch Groups Statistics',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Overview: $totalA Avail · $totalNA N/A · $totalP Pending',
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
               ),
               Container(
                 padding: const EdgeInsets.all(6),
@@ -732,13 +1043,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
           // Visual Grouped Bar Chart
           SizedBox(
-            height: 140,
+            height: 130,
             width: double.infinity,
             child: CustomPaint(
               painter: _BranchGroupsBarPainter(groupStats),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
 
           // X-Axis Labels
           Row(
@@ -757,40 +1068,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 14),
 
-          // Group Statistics Items Breakdown List
-          Column(
-            children: groupStats.map((g) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4.0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      flex: 3,
-                      child: Text(
-                        g.name,
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF334155)),
-                      ),
-                    ),
-                    Expanded(
-                      flex: 5,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          _buildSmallStatBadge('${g.avail} Avail', const Color(0xFF10B981), const Color(0xFFECFDF5)),
-                          const SizedBox(width: 4),
-                          _buildSmallStatBadge('${g.notAvail} N/A', const Color(0xFFEF4444), const Color(0xFFFEF2F2)),
-                          const SizedBox(width: 4),
-                          _buildSmallStatBadge('${g.pending} Pnd', const Color(0xFFF59E0B), const Color(0xFFFFFBEB)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-          ),
-
-          const SizedBox(height: 12),
+          // Legend Dots
           const Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -800,6 +1078,64 @@ class _DashboardScreenState extends State<DashboardScreen> {
               SizedBox(width: 16),
               _LegendDot(color: Color(0xFFF59E0B), label: 'Pending'),
             ],
+          ),
+
+          if (_showGroupBreakdown) ...[
+            const SizedBox(height: 14),
+            const Divider(height: 1, color: Color(0xFFF1F5F9)),
+            const SizedBox(height: 10),
+            Column(
+              children: groupStats.map((g) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4.0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: Text(
+                          g.name,
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF334155)),
+                        ),
+                      ),
+                      Expanded(
+                        flex: 5,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            _buildSmallStatBadge('${g.avail}', const Color(0xFF10B981), const Color(0xFFECFDF5)),
+                            const SizedBox(width: 4),
+                            _buildSmallStatBadge('${g.notAvail}', const Color(0xFFEF4444), const Color(0xFFFEF2F2)),
+                            const SizedBox(width: 4),
+                            _buildSmallStatBadge('${g.pending}', const Color(0xFFF59E0B), const Color(0xFFFFFBEB)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+
+          const SizedBox(height: 8),
+          Center(
+            child: TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _showGroupBreakdown = !_showGroupBreakdown;
+                });
+              },
+              icon: Icon(_showGroupBreakdown ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded, size: 16, color: const Color(0xFF4F46E5)),
+              label: Text(
+                _showGroupBreakdown ? 'Hide group details' : 'Show group details',
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF4F46E5)),
+              ),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
           ),
         ],
       ),

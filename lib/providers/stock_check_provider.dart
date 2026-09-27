@@ -41,16 +41,15 @@ class StockCheckProvider extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
+    debugPrint('\n[StockCheckProvider] Fetching initial groups and brands...');
     _groups = await _apiService.getBranchGroups();
     _brands = await _apiService.getBrands();
+    debugPrint('[StockCheckProvider] Loaded ${_groups.length} groups and ${_brands.length} brands.');
 
     if (_groups.isNotEmpty) {
-      _selectedGroup = _groups.firstWhere((g) => g.name == 'Saudia Group', orElse: () => _groups.first);
+      _selectedGroup = _groups.first;
       await loadBranchesForGroup(_selectedGroup!);
     }
-
-    _isLoading = false;
-    notifyListeners();
   }
 
   Future<void> selectGroup(BranchGroup group) async {
@@ -63,12 +62,12 @@ class StockCheckProvider extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
+    debugPrint('[StockCheckProvider] Loading branches for Group ID: ${group.id} (${group.name})...');
     _branches = await _apiService.getBranches(groupId: group.id);
+    debugPrint('[StockCheckProvider] Loaded ${_branches.length} branches.');
+
     if (_branches.isNotEmpty) {
-      _selectedBranch = _branches.firstWhere(
-        (b) => b.name == 'SAUDI MAITHER',
-        orElse: () => _branches.first,
-      );
+      _selectedBranch = _branches.first;
     } else {
       _selectedBranch = null;
     }
@@ -86,12 +85,16 @@ class StockCheckProvider extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
+    debugPrint('[StockCheckProvider] Loading products for Branch ID: ${_selectedBranch?.id} (${_selectedBranch?.name})...');
+    debugPrint('[StockCheckProvider] Params -> Search: "$_searchQuery", Brand: "$_selectedBrand", SortBy: "$_selectedSortBy"');
+
     _products = await _apiService.getProducts(
       branchId: _selectedBranch?.id,
       search: _searchQuery,
       brand: _selectedBrand,
       sortBy: _selectedSortBy,
     );
+    debugPrint('[StockCheckProvider] Loaded ${_products.length} products.');
 
     // Apply pending local edits
     for (var i = 0; i < _products.length; i++) {
