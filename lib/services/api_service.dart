@@ -11,11 +11,14 @@ class ApiService {
   static void Function()? onSessionExpired;
   late final Dio _dio;
 
+  // Track active cancel token for product queries to prevent request stacking
+  CancelToken? _productsCancelToken;
+
   ApiService() {
     _dio = Dio(
       BaseOptions(
         baseUrl: baseUrl,
-        connectTimeout: const Duration(seconds: 60),
+        connectTimeout: const Duration(seconds: 35),
         receiveTimeout: const Duration(seconds: 60),
         headers: {
           'Content-Type': 'application/json',
@@ -33,7 +36,7 @@ class ApiService {
             options.headers['Authorization'] = 'Bearer $token';
           }
           final msg =
-              '''
+          '''
 ==================================== API REQUEST ====================================
 --> ${options.method.toUpperCase()} ${options.baseUrl}${options.path}
 Headers: ${options.headers}
@@ -45,7 +48,7 @@ Body: ${options.data}
         },
         onResponse: (response, handler) {
           final msg =
-              '''
+          '''
 =================================== API RESPONSE ===================================
 <-- ${response.statusCode} ${response.requestOptions.baseUrl}${response.requestOptions.path}
 Response Data: ${response.data}
@@ -54,8 +57,14 @@ Response Data: ${response.data}
           return handler.next(response);
         },
         onError: (DioException error, handler) {
+          // Don't clutter logs if the request was intentionally cancelled
+          if (CancelToken.isCancel(error)) {
+            debugPrint('[ApiService] Request cancelled by client.');
+            return handler.next(error);
+          }
+
           final msg =
-              '''
+          '''
 ===================================== API ERROR =====================================
 <-- ERROR ${error.response?.statusCode} ${error.requestOptions.baseUrl}${error.requestOptions.path}
 Message: ${error.message}
@@ -124,9 +133,9 @@ Error Response Data: ${error.response?.data}
       } else if (response.data is Map) {
         rawList =
             response.data['branches'] ??
-            response.data['data'] ??
-            response.data['outlets'] ??
-            [];
+                response.data['data'] ??
+                response.data['outlets'] ??
+                [];
       }
       debugPrint('[ApiService] Loaded ${rawList.length} branches');
       return rawList.map((e) => Branch.fromJson(e)).toList();
@@ -146,9 +155,9 @@ Error Response Data: ${error.response?.data}
       } else if (response.data is Map) {
         rawList =
             response.data['groups'] ??
-            response.data['data'] ??
-            response.data['branch_groups'] ??
-            [];
+                response.data['data'] ??
+                response.data['branch_groups'] ??
+                [];
       }
       debugPrint('[ApiService] Loaded ${rawList.length} branch groups');
       return rawList.map((e) => BranchGroup.fromJson(e)).toList();
@@ -164,10 +173,19 @@ Error Response Data: ${error.response?.data}
     String? search,
     String? brand,
     String? sortBy,
-    int? limit = 100,
+    int? limit = 10,
     int? page = 1,
     int? mslOnly = 1,
+    CancelToken? cancelToken,
   }) async {
+    // Cancel prior pending products fetch request if a new one is started
+    if (cancelToken == null) {
+      _productsCancelToken?.cancel('New getProducts call initiated');
+      _productsCancelToken = CancelToken();
+    }
+
+    final activeToken = cancelToken ?? _productsCancelToken;
+
     try {
       String? cleanSort;
       if (sortBy != null && sortBy.isNotEmpty) {
@@ -185,37 +203,47 @@ Error Response Data: ${error.response?.data}
       }
 
       final queryParams =
-          <String, dynamic>{
-            'branchId': branchId,
-            'search': search,
-            'brand': brand == 'All Brands' || brand == 'All brands'
-                ? null
-                : brand,
-            'sortBy': cleanSort,
-            'page': page ?? 1,
-            'limit': limit ?? 100,
-            'mslOnly': mslOnly,
-          }..removeWhere(
+      <String, dynamic>{
+        'branchId': branchId,
+        'search': search,
+        'brand': brand == 'All Brands' || brand == 'All brands'
+            ? null
+            : brand,
+        'sortBy': cleanSort,
+        'page': page ?? 1,
+        'limit': limit ?? 10,
+        'mslOnly': mslOnly,
+      }..removeWhere(
             (key, value) => value == null || (value is String && value.isEmpty),
-          );
+      );
+
       final response = await _dio.get(
         '/products',
         queryParameters: queryParams,
+        cancelToken: activeToken,
       );
+
       List rawList = [];
       if (response.data is List) {
         rawList = response.data;
       } else if (response.data is Map) {
         rawList =
             response.data['products'] ??
-            response.data['data'] ??
-            response.data['items'] ??
-            [];
+                response.data['data'] ??
+                response.data['items'] ??
+                [];
       }
       debugPrint(
         '[ApiService] Loaded ${rawList.length} products for branch $branchId',
       );
       return rawList.map((e) => Product.fromJson(e)).toList();
+    } on DioException catch (e) {
+      if (CancelToken.isCancel(e)) {
+        debugPrint('[ApiService] getProducts request cancelled.');
+      } else {
+        debugPrint('[ApiService] Error loading products: $e');
+      }
+      return [];
     } catch (e) {
       debugPrint('[ApiService] Error loading products: $e');
       return [];
@@ -247,7 +275,7 @@ Error Response Data: ${error.response?.data}
   // GET /api/products/bootstrap - Initial stock-check page data
   Future<Map<String, dynamic>> getProductsBootstrap({
     int? branchId,
-    int limit = 25,
+    int limit = 10,
     String? sortBy,
   }) async {
     try {
@@ -302,10 +330,10 @@ Error Response Data: ${error.response?.data}
 
   // POST /api/stock/check/:productId/:branchId/images - Upload image for stock check
   Future<bool> uploadStockCheckImage(
-    int productId,
-    int branchId,
-    String imagePath,
-  ) async {
+      int productId,
+      int branchId,
+      String imagePath,
+      ) async {
     try {
       final fileName = imagePath.split('/').last.split('\\').last;
       final formData = FormData.fromMap({
@@ -329,9 +357,9 @@ Error Response Data: ${error.response?.data}
 
   // GET /api/stock/check/:productId/:branchId/detail - Stock-check detail (remarks, ERP stock)
   Future<Map<String, dynamic>> getStockCheckDetail(
-    int productId,
-    int branchId,
-  ) async {
+      int productId,
+      int branchId,
+      ) async {
     try {
       final response = await _dio.get(
         '/stock/check/$productId/$branchId/detail',
@@ -379,12 +407,15 @@ Error Response Data: ${error.response?.data}
       if (date != null) queryParams['date'] = date;
       if (dateFrom != null) queryParams['dateFrom'] = dateFrom;
       if (dateTo != null) queryParams['dateTo'] = dateTo;
-      if (brand != null && brand != 'All brands' && brand != 'All Brands')
+      if (brand != null && brand != 'All brands' && brand != 'All Brands') {
         queryParams['brand'] = brand;
-      if (groupId != null && groupId != 'All groups')
+      }
+      if (groupId != null && groupId != 'All groups') {
         queryParams['groupId'] = groupId;
-      if (outletId != null && outletId != 'All outlets')
+      }
+      if (outletId != null && outletId != 'All outlets') {
         queryParams['outletId'] = outletId;
+      }
 
       final response = await _dio.get(
         '/dashboard/updates',
@@ -495,8 +526,9 @@ Error Response Data: ${error.response?.data}
       if (search != null && search.isNotEmpty) queryParams['search'] = search;
       if (brand != null && brand.isNotEmpty) queryParams['brand'] = brand;
       if (mslOnly == true) queryParams['mslOnly'] = 1;
-      if (mslStatus != null && mslStatus.isNotEmpty)
+      if (mslStatus != null && mslStatus.isNotEmpty) {
         queryParams['mslStatus'] = mslStatus;
+      }
 
       final response = await _dio.get(
         '/export/stock-status',

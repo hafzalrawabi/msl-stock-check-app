@@ -21,16 +21,48 @@ class StockCheckScreen extends StatefulWidget {
 
 class _StockCheckScreenState extends State<StockCheckScreen> {
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final FocusNode _searchFocusNode = FocusNode(); // Dedicated FocusNode
+  final ApiService _apiService = ApiService();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     _searchController.dispose();
+    _searchFocusNode.dispose(); // Proper cleanup
     super.dispose();
   }
 
-  final ApiService _apiService = ApiService();
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final currentScroll = _scrollController.offset;
+
+    // Trigger pagination when user is 200px from the bottom
+    if (currentScroll >= (maxScroll - 200)) {
+      final provider = Provider.of<StockProvider>(context, listen: false);
+      if (!provider.isLoadingMore && provider.hasMoreProducts) {
+        provider.loadMoreProducts();
+      }
+    }
+  }
+
+  void _unfocusSearch() {
+    if (_searchFocusNode.hasFocus) {
+      _searchFocusNode.unfocus();
+    }
+    FocusScope.of(context).unfocus();
+  }
 
   void _openBarcodeScanner() async {
+    _unfocusSearch();
     final provider = Provider.of<StockProvider>(context, listen: false);
     final scannedCode = await showDialog<String>(
       context: context,
@@ -43,6 +75,7 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
   }
 
   void _openFilterDialog() {
+    _unfocusSearch();
     showDialog(
       context: context,
       builder: (_) => const FilterDialog(),
@@ -50,11 +83,11 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
   }
 
   void _openStockCheckDetail(Product product) async {
+    _unfocusSearch();
     final stockProvider = Provider.of<StockProvider>(context, listen: false);
     final branch = stockProvider.selectedBranch;
     final branchId = branch?.id ?? 0;
 
-    // Fetch detail from GET /api/stock/check/:productId/:branchId/detail
     Map<String, dynamic> detail = {};
     if (branchId > 0) {
       detail = await _apiService.getStockCheckDetail(product.id, branchId);
@@ -185,6 +218,7 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
   }
 
   void _openRemarksDialog(Product product) async {
+    _unfocusSearch();
     final stockProvider = Provider.of<StockProvider>(context, listen: false);
     final branchId = stockProvider.selectedBranch?.id ?? 0;
 
@@ -236,6 +270,7 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
                     child: SizedBox(
                       height: 44,
                       child: TextField(
+                        focusNode: _searchFocusNode, // Attached FocusNode
                         controller: _searchController,
                         onChanged: (val) => stockProvider.setSearchQuery(val),
                         decoration: InputDecoration(
@@ -244,12 +279,13 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
                           prefixIcon: const Icon(Icons.search_rounded, size: 18, color: Color(0xFF64748B)),
                           suffixIcon: _searchController.text.isNotEmpty
                               ? IconButton(
-                                  icon: const Icon(Icons.clear_rounded, size: 16, color: Color(0xFF64748B)),
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    stockProvider.setSearchQuery('');
-                                  },
-                                )
+                            icon: const Icon(Icons.clear_rounded, size: 16, color: Color(0xFF64748B)),
+                            onPressed: () {
+                              _searchController.clear();
+                              stockProvider.setSearchQuery('');
+                              _unfocusSearch();
+                            },
+                          )
                               : null,
                           contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                         ),
@@ -290,46 +326,68 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
           child: RefreshIndicator(
             color: const Color(0xFF4F46E5),
             onRefresh: () async {
+              _unfocusSearch();
               await stockProvider.fetchProducts();
             },
             child: stockProvider.isLoading
                 ? const SingleChildScrollView(
-                    physics: AlwaysScrollableScrollPhysics(),
-                    child: SizedBox(
-                      height: 400,
-                      child: Center(child: LetterLoader(text: 'Loading stock catalogue...')),
-                    ),
-                  )
+              physics: AlwaysScrollableScrollPhysics(),
+              child: SizedBox(
+                height: 400,
+                child: Center(child: LetterLoader(text: 'Loading stock catalogue...')),
+              ),
+            )
                 : stockProvider.products.isEmpty
-                    ? SingleChildScrollView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        child: Container(
-                          height: 400,
-                          padding: const EdgeInsets.all(24),
-                          child: const Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.inventory_rounded, size: 40, color: Color(0xFF94A3B8)),
-                                SizedBox(height: 8),
-                                Text('No products found in branch.', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
-                                SizedBox(height: 4),
-                                Text('Pull down to refresh stock list', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
-                              ],
-                            ),
-                          ),
+                ? SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              child: Container(
+                height: 400,
+                padding: const EdgeInsets.all(24),
+                child: const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.inventory_rounded, size: 40, color: Color(0xFF94A3B8)),
+                      SizedBox(height: 8),
+                      Text('No products found in branch.', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
+                      SizedBox(height: 4),
+                      Text('Pull down to refresh stock list', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+                    ],
+                  ),
+                ),
+              ),
+            )
+                : ListView.separated(
+              controller: _scrollController,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(16),
+              itemCount: stockProvider.products.length + (stockProvider.isLoadingMore ? 1 : 0),
+              separatorBuilder: (_, index) {
+                if (index == stockProvider.products.length - 1 && stockProvider.isLoadingMore) {
+                  return const SizedBox.shrink();
+                }
+                return const SizedBox(height: 12);
+              },
+              itemBuilder: (ctx, index) {
+                if (index == stockProvider.products.length) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16.0),
+                    child: Center(
+                      child: SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Color(0xFF4F46E5),
                         ),
-                      )
-                    : ListView.separated(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.all(16),
-                        itemCount: stockProvider.products.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 12),
-                        itemBuilder: (ctx, index) {
-                          final p = stockProvider.products[index];
-                          return _buildMobileStockCard(p, stockProvider);
-                        },
                       ),
+                    ),
+                  );
+                }
+                final p = stockProvider.products[index];
+                return _buildMobileStockCard(p, stockProvider);
+              },
+            ),
           ),
         ),
 
@@ -351,7 +409,12 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: stockProvider.hasUnsavedChanges ? () => stockProvider.discardChanges() : null,
+                    onPressed: stockProvider.hasUnsavedChanges
+                        ? () {
+                      _unfocusSearch();
+                      stockProvider.discardChanges();
+                    }
+                        : null,
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(color: stockProvider.hasUnsavedChanges ? Colors.white54 : Colors.white24),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -371,20 +434,21 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
                   child: ElevatedButton(
                     onPressed: stockProvider.hasUnsavedChanges
                         ? () async {
-                            final messenger = ScaffoldMessenger.of(context);
-                            await stockProvider.saveAllChanges();
-                            messenger.showSnackBar(
-                              SnackBar(
-                                backgroundColor: const Color(0xFF10B981),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                behavior: SnackBarBehavior.floating,
-                                content: const Text('All stock check changes saved successfully!'),
-                              ),
-                            );
-                          }
+                      _unfocusSearch();
+                      final messenger = ScaffoldMessenger.of(context);
+                      await stockProvider.saveAllChanges();
+                      messenger.showSnackBar(
+                        SnackBar(
+                          backgroundColor: const Color(0xFF10B981),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          behavior: SnackBarBehavior.floating,
+                          content: const Text('All stock check changes saved successfully!'),
+                        ),
+                      );
+                    }
                         : null,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor:   const Color(0xFF10B981) ,
+                      backgroundColor: const Color(0xFF10B981),
                       elevation: 0,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -423,6 +487,7 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
         const SizedBox(height: 4),
         InkWell(
           onTap: () async {
+            _unfocusSearch(); // Hide keyboard on group selection
             final selected = await showModalBottomSheet<BranchGroup>(
               context: context,
               isScrollControlled: true,
@@ -433,6 +498,7 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
               ),
             );
             if (selected != null) {
+              _unfocusSearch();
               provider.setSelectedGroup(selected);
             }
           },
@@ -478,6 +544,7 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
         const SizedBox(height: 4),
         InkWell(
           onTap: () async {
+            _unfocusSearch(); // Hide keyboard on outlet tap
             final selected = await showModalBottomSheet<Branch>(
               context: context,
               isScrollControlled: true,
@@ -488,6 +555,7 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
               ),
             );
             if (selected != null) {
+              _unfocusSearch(); // Ensure keyboard stays hidden after selection
               provider.setSelectedBranch(selected);
             }
           },
@@ -554,6 +622,7 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
         child: IconButton(
           icon: const Icon(Icons.table_view_rounded, color: Color(0xFF059669), size: 18),
           onPressed: () async {
+            _unfocusSearch();
             final messenger = ScaffoldMessenger.of(context);
             messenger.showSnackBar(
               const SnackBar(
@@ -615,162 +684,168 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
           ],
         ),
         child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // SL & Barcode row
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(color: const Color(0xFFE2E8F0), borderRadius: BorderRadius.circular(4)),
-                child: Text('SL #${p.slNo}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF475569))),
-              ),
-              const SizedBox(width: 8),
-              Text(p.barcode, style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), fontFamily: 'monospace')),
-              const Spacer(),
-
-              // Status Badge
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: isNotAvail
-                      ? const Color(0xFFFEE2E2)
-                      : const Color(0xFFD1FAE5),
-                  borderRadius: BorderRadius.circular(10),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // SL & Barcode row
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(color: const Color(0xFFE2E8F0), borderRadius: BorderRadius.circular(4)),
+                  child: Text('SL #${p.slNo}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF475569))),
                 ),
-                child: Text(
-                  isNotAvail ? 'NOT AVAILABLE' : 'AVAILABLE',
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.bold,
-                    color: isNotAvail ? const Color(0xFFB91C1C) : const Color(0xFF047857),
+                const SizedBox(width: 8),
+                Text(p.barcode, style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), fontFamily: 'monospace')),
+                const Spacer(),
+
+                // Status Badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: isNotAvail
+                        ? const Color(0xFFFEE2E2)
+                        : const Color(0xFFD1FAE5),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    isNotAvail ? 'NOT AVAILABLE' : 'AVAILABLE',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: isNotAvail ? const Color(0xFFB91C1C) : const Color(0xFF047857),
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
+              ],
+            ),
+            const SizedBox(height: 8),
 
-          // Product Name
-          Text(
-            p.itemName,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
-          ),
-          const SizedBox(height: 6),
-          // Stock breakdown pills (TOTAL, SHELF, BACK, UNIT)
-          Wrap(
-            spacing: 6,
-            runSpacing: 4,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              _buildStockPill('TOTAL', '${p.totalStock > 0 ? p.totalStock : (p.erpStock ?? "0")}', const Color(0xFF334155)),
-              _buildStockPill('SHELF', '${p.shelfStock}', const Color(0xFF64748B)),
-              _buildStockPill('BACK', '${p.backStock}', const Color(0xFF64748B)),
-              _buildStockPill('UNIT', p.unit, const Color(0xFF4F46E5)),
-            ],
-          ),
-          const SizedBox(height: 10),
+            // Product Name
+            Text(
+              p.itemName,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+            ),
+            const SizedBox(height: 6),
+            // Stock breakdown pills (TOTAL, SHELF, BACK, UNIT)
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _buildStockPill('TOTAL', '${p.totalStock > 0 ? p.totalStock : (p.erpStock ?? "0")}', const Color(0xFF334155)),
+                _buildStockPill('SHELF', '${p.shelfStock}', const Color(0xFF64748B)),
+                _buildStockPill('BACK', '${p.backStock}', const Color(0xFF64748B)),
+                _buildStockPill('UNIT', p.unit, const Color(0xFF4F46E5)),
+              ],
+            ),
+            const SizedBox(height: 10),
 
-          // Toggle Action Buttons Row
-          Row(
-            children: [
-              // Available Button
-              Expanded(
-                child: InkWell(
-                  onTap: () => provider.toggleProductAvailability(p.id, true),
-                  borderRadius: BorderRadius.circular(10),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    decoration: BoxDecoration(
-                      color: isAvail ? const Color(0xFF10B981) : Colors.white,
-                      border: Border.all(color: const Color(0xFF10B981), width: 1.5),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.check_circle_rounded,
-                          size: 16,
-                          color: isAvail ? Colors.white : const Color(0xFF10B981),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Available',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
+            // Toggle Action Buttons Row
+            Row(
+              children: [
+                // Available Button
+                Expanded(
+                  child: InkWell(
+                    onTap: () {
+                      _unfocusSearch();
+                      provider.toggleProductAvailability(p.id, true);
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isAvail ? const Color(0xFF10B981) : Colors.white,
+                        border: Border.all(color: const Color(0xFF10B981), width: 1.5),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.check_circle_rounded,
+                            size: 16,
                             color: isAvail ? Colors.white : const Color(0xFF10B981),
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 6),
+                          Text(
+                            'Available',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: isAvail ? Colors.white : const Color(0xFF10B981),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
+                const SizedBox(width: 8),
 
-              // Not Available Button
-              Expanded(
-                child: InkWell(
-                  onTap: () => provider.toggleProductAvailability(p.id, false),
-                  borderRadius: BorderRadius.circular(10),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    decoration: BoxDecoration(
-                      color: isNotAvail ? const Color(0xFFEF4444) : Colors.white,
-                      border: Border.all(color: const Color(0xFFEF4444), width: 1.5),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.cancel_rounded,
-                          size: 16,
-                          color: isNotAvail ? Colors.white : const Color(0xFFEF4444),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          'N/A',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
+                // Not Available Button
+                Expanded(
+                  child: InkWell(
+                    onTap: () {
+                      _unfocusSearch();
+                      provider.toggleProductAvailability(p.id, false);
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isNotAvail ? const Color(0xFFEF4444) : Colors.white,
+                        border: Border.all(color: const Color(0xFFEF4444), width: 1.5),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.cancel_rounded,
+                            size: 16,
                             color: isNotAvail ? Colors.white : const Color(0xFFEF4444),
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 6),
+                          Text(
+                            'N/A',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: isNotAvail ? Colors.white : const Color(0xFFEF4444),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
+                const SizedBox(width: 8),
 
-              // Remark Icon Button
-              InkWell(
-                onTap: () => _openRemarksDialog(p),
-                borderRadius: BorderRadius.circular(10),
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: p.remarks != null && p.remarks!.isNotEmpty ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: p.remarks != null && p.remarks!.isNotEmpty ? const Color(0xFF4F46E5) : const Color(0xFFE2E8F0)),
-                  ),
-                  child: Icon(
-                    Icons.edit_note_rounded,
-                    color: p.remarks != null && p.remarks!.isNotEmpty ? const Color(0xFF4F46E5) : const Color(0xFF64748B),
-                    size: 20,
+                // Remark Icon Button
+                InkWell(
+                  onTap: () => _openRemarksDialog(p),
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: p.remarks != null && p.remarks!.isNotEmpty ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: p.remarks != null && p.remarks!.isNotEmpty ? const Color(0xFF4F46E5) : const Color(0xFFE2E8F0)),
+                    ),
+                    child: Icon(
+                      Icons.edit_note_rounded,
+                      color: p.remarks != null && p.remarks!.isNotEmpty ? const Color(0xFF4F46E5) : const Color(0xFF64748B),
+                      size: 20,
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 }

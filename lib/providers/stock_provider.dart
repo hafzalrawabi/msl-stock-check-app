@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/branch.dart';
 import '../models/dashboard_summary.dart';
@@ -21,8 +23,18 @@ class StockProvider extends ChangeNotifier {
   String _selectedBrand = 'All Brands';
   String _sortBy = 'Default (SL No.)';
   String _selectedStatus = 'All Status';
+
+  // Pagination & Loading
   bool _isLoading = false;
+  bool _isLoadingMore = false;
+  bool _hasMoreProducts = true;
+  int _page = 1;
+  final int _limit = 25;
+
   bool _hasUnsavedChanges = false;
+
+  // Timer for search debouncing
+  Timer? _searchDebounceTimer;
 
   // Getters
   List<BranchGroup> get groups => _groups;
@@ -45,7 +57,9 @@ class StockProvider extends ChangeNotifier {
             .replaceAll(RegExp(r'\s*\(\d+\)'), '')
             .trim()
             .toLowerCase();
-        if (cleanBranchGroup == cleanGroupName || cleanBranchGroup.contains(cleanGroupName) || cleanGroupName.contains(cleanBranchGroup)) {
+        if (cleanBranchGroup == cleanGroupName ||
+            cleanBranchGroup.contains(cleanGroupName) ||
+            cleanGroupName.contains(cleanBranchGroup)) {
           return true;
         }
       }
@@ -55,7 +69,8 @@ class StockProvider extends ChangeNotifier {
     return groupBranches.isNotEmpty ? groupBranches : _branches;
   }
 
-  List<Product> get products => _filteredProducts;
+  // Returns server-driven products list directly
+  List<Product> get products => _products;
   List<StockUpdateItem> get updates => _updates;
   DashboardSummary get dashboardSummary => _dashboardSummary;
 
@@ -67,7 +82,11 @@ class StockProvider extends ChangeNotifier {
   String get selectedBrand => _selectedBrand;
   String get sortBy => _sortBy;
   String get selectedStatus => _selectedStatus;
+
   bool get isLoading => _isLoading;
+  bool get isLoadingMore => _isLoadingMore;
+  bool get hasMoreProducts => _hasMoreProducts;
+  int get page => _page;
   bool get hasUnsavedChanges => _hasUnsavedChanges;
 
   List<String> get availableBrands {
@@ -90,7 +109,6 @@ class StockProvider extends ChangeNotifier {
     _selectedDate = DateTime.now();
     notifyListeners();
 
-    debugPrint('\n[FETCH DATA] Initializing dashboard & stock data...');
     try {
       final bootstrap = await _apiService.getBranchesBootstrap();
       if (bootstrap.isNotEmpty) {
@@ -111,8 +129,6 @@ class StockProvider extends ChangeNotifier {
         _branches = await _apiService.getBranches();
       }
 
-      debugPrint('[FETCH DATA] Loaded ${_groups.length} groups and ${_branches.length} branches.');
-
       if (_groups.isNotEmpty && _selectedGroup == null) {
         _selectedGroup = _groups.first;
       }
@@ -128,31 +144,24 @@ class StockProvider extends ChangeNotifier {
         await fetchProducts();
       }
     } catch (e) {
-      debugPrint('[FETCH DATA ERROR] Exception during initData: $e');
+      debugPrint('[INIT ERROR] $e');
     }
 
     _isLoading = false;
     notifyListeners();
   }
 
-  final Map<int, List<Product>> _branchCache = {};
-
+  /// Direct Server Fetch (Triggers API search regardless of loaded items)
   Future<void> fetchProducts({bool showLoader = true}) async {
     final branchId = _selectedBranch?.id;
-    final hasCachedData = branchId != null && _branchCache.containsKey(branchId);
 
-    // If cached products exist, show them immediately without blocking UI
-    if (hasCachedData && _products.isEmpty) {
-      _products = List.from(_branchCache[branchId]!);
-      notifyListeners();
-    }
+    _page = 1;
+    _hasMoreProducts = true;
 
-    if (!hasCachedData && showLoader && _products.isEmpty) {
+    if (showLoader) {
       _isLoading = true;
       notifyListeners();
     }
-
-    debugPrint('\n[FETCH DATA] Requesting product catalogue for Branch ID: $branchId (${_selectedBranch?.name})...');
 
     try {
       final fetched = await _apiService.getProducts(
@@ -160,15 +169,17 @@ class StockProvider extends ChangeNotifier {
         search: _searchQuery,
         brand: _selectedBrand,
         sortBy: _sortBy,
+        page: _page,
+        limit: _limit,
       );
 
       _products = fetched;
-      if (branchId != null) {
-        _branchCache[branchId] = List.from(fetched);
+
+      if (fetched.length < _limit) {
+        _hasMoreProducts = false;
       }
-      debugPrint('[FETCH DATA SUCCESS] Received ${_products.length} products for ${_selectedBranch?.name}');
     } catch (e) {
-      debugPrint('[FETCH DATA ERROR] Error fetching products: $e');
+      debugPrint('[FETCH ERROR] $e');
     }
 
     _isLoading = false;
@@ -176,47 +187,68 @@ class StockProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  List<Product> get _filteredProducts {
-    List<Product> list = List.from(_products);
+  /// Debouncing API Search (Triggers search query on backend after 400ms delay)
+  void setSearchQuery(String query) {
+    _searchQuery = query;
 
-    if (_searchQuery.isNotEmpty) {
-      final q = _searchQuery.toLowerCase();
-      list = list.where((p) =>
-        p.itemName.toLowerCase().contains(q) ||
-        p.barcode.toLowerCase().contains(q) ||
-        p.brand.toLowerCase().contains(q) ||
-        p.slNo.toString().contains(q)
-      ).toList();
+    // Cancel existing timer if user is still typing
+    if (_searchDebounceTimer?.isActive ?? false) {
+      _searchDebounceTimer!.cancel();
     }
 
-    if (_selectedBrand != 'All Brands') {
-      list = list.where((p) => p.brand.toLowerCase() == _selectedBrand.toLowerCase()).toList();
-    }
+    // Debounce duration: Wait 400ms before making API request
+    _searchDebounceTimer = Timer(const Duration(milliseconds: 400), () {
+      fetchProducts(showLoader: true);
+    });
+  }
 
-    if (_selectedStatus == 'Available') {
-      list = list.where((p) => p.isAvailable == true).toList();
-    } else if (_selectedStatus == 'Not Available') {
-      list = list.where((p) => p.isAvailable == false).toList();
-    } else if (_selectedStatus == 'Pending') {
-      list = list.where((p) => p.isAvailable == null).toList();
-    }
+  /// Load Next Batch on Infinite Scroll
+  Future<void> loadMoreProducts() async {
+    if (_isLoadingMore || !_hasMoreProducts || _isLoading) return;
 
-    if (_sortBy == 'A to Z') {
-      list.sort((a, b) => a.itemName.compareTo(b.itemName));
-    } else if (_sortBy == 'Z to A') {
-      list.sort((a, b) => b.itemName.compareTo(a.itemName));
-    } else {
-      list.sort((a, b) => a.slNo.compareTo(b.slNo));
-    }
+    final branchId = _selectedBranch?.id;
+    _isLoadingMore = true;
+    notifyListeners();
 
-    return list;
+    final nextPage = _page + 1;
+
+    try {
+      final fetched = await _apiService.getProducts(
+        branchId: branchId,
+        search: _searchQuery,
+        brand: _selectedBrand,
+        sortBy: _sortBy,
+        page: nextPage,
+        limit: _limit,
+      );
+
+      if (fetched.isNotEmpty) {
+        _page = nextPage;
+
+        // Ensure no duplicated entries when appending
+        final existingIds = _products.map((p) => p.id).toSet();
+        final newItems = fetched.where((p) => !existingIds.contains(p.id)).toList();
+
+        _products.addAll(newItems);
+      }
+
+      if (fetched.length < _limit) {
+        _hasMoreProducts = false;
+      }
+    } catch (e) {
+      debugPrint('[LOAD MORE ERROR] $e');
+    } finally {
+      _isLoadingMore = false;
+      notifyListeners();
+    }
   }
 
   void applyFilters({String? brand, String? sort, String? status}) {
     if (brand != null) _selectedBrand = brand;
     if (sort != null) _sortBy = sort;
     if (status != null) _selectedStatus = status;
-    notifyListeners();
+
+    fetchProducts();
   }
 
   Future<void> setSelectedGroup(BranchGroup group) async {
@@ -248,16 +280,8 @@ class StockProvider extends ChangeNotifier {
   void setSelectedBranch(Branch branch) {
     if (_selectedBranch?.id == branch.id) return;
     _selectedBranch = branch;
-    
-    // Show cached branch data instantly if available
-    if (_branchCache.containsKey(branch.id)) {
-      _products = List.from(_branchCache[branch.id]!);
-      notifyListeners();
-      fetchProducts(showLoader: false);
-    } else {
-      _products.clear();
-      fetchProducts(showLoader: true);
-    }
+    _products.clear();
+    fetchProducts(showLoader: true);
   }
 
   void setSelectedDate(DateTime date) {
@@ -265,26 +289,21 @@ class StockProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setSearchQuery(String query) {
-    _searchQuery = query;
-    notifyListeners();
-  }
-
   void setBrandFilter(String brand) {
     _selectedBrand = brand;
-    notifyListeners();
+    fetchProducts();
   }
 
   void setSortBy(String sort) {
     _sortBy = sort;
-    notifyListeners();
+    fetchProducts();
   }
 
   void toggleProductAvailability(int productId, bool isAvailable) {
     final index = _products.indexWhere((p) => p.id == productId);
     if (index != -1) {
       if (_products[index].isAvailable == isAvailable) {
-        _products[index].isAvailable = null; // Toggle back to pending
+        _products[index].isAvailable = null;
       } else {
         _products[index].isAvailable = isAvailable;
       }
@@ -320,7 +339,7 @@ class StockProvider extends ChangeNotifier {
           );
         }
       }
-      // Execute all pending stock updates concurrently in parallel for maximum speed
+
       if (updateFutures.isNotEmpty) {
         await Future.wait(updateFutures);
       }
@@ -343,5 +362,11 @@ class StockProvider extends ChangeNotifier {
   void clearUpdates() {
     _updates.clear();
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _searchDebounceTimer?.cancel();
+    super.dispose();
   }
 }
