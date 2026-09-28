@@ -632,6 +632,7 @@ class _StockCheckScreenState extends State<StockCheckScreen> {
               ),
             );
             final success = await ExcelService.exportStockReport(
+              context: context,
               branch: provider.selectedBranch,
               products: provider.products,
               search: provider.searchQuery,

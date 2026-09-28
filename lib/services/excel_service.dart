@@ -1,16 +1,18 @@
 import 'dart:io';
 import 'package:excel/excel.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/branch.dart';
 import '../models/product.dart';
 import '../services/api_service.dart';
+import 'export_service.dart';
 
 class ExcelService {
   /// Export stock report using backend API GET /api/export/stock-status, with fallback to local generation
   static Future<bool> exportStockReport({
+    BuildContext? context,
     required Branch? branch,
     required List<Product> products,
     String? search,
@@ -37,7 +39,9 @@ class ExcelService {
         await file.writeAsBytes(reportBytes);
         debugPrint('[ExcelService] Downloaded stock status report from API to: ${file.path}');
 
-        await _shareOrOpenFile(file, branch?.name);
+        final validContext = (context != null && context.mounted) ? context : null;
+        // ignore: use_build_context_synchronously
+        await _shareOrOpenFile(file, branch?.name, context: validContext, fileName: fileName);
         return true;
       }
     } catch (e) {
@@ -45,10 +49,13 @@ class ExcelService {
     }
 
     // Fallback to local client excel generation
-    return generateAndExportStockReport(branch: branch, products: products);
+    final validContext = (context != null && context.mounted) ? context : null;
+    // ignore: use_build_context_synchronously
+    return generateAndExportStockReport(context: validContext, branch: branch, products: products);
   }
 
   static Future<bool> generateAndExportStockReport({
+    BuildContext? context,
     required Branch? branch,
     required List<Product> products,
   }) async {
@@ -116,7 +123,9 @@ class ExcelService {
       await file.writeAsBytes(bytes);
       debugPrint('[ExcelService] Saved Excel report to: ${file.path}');
 
-      await _shareOrOpenFile(file, branch?.name);
+      final validContext = (context != null && context.mounted) ? context : null;
+      // ignore: use_build_context_synchronously
+      await _shareOrOpenFile(file, branch?.name, context: validContext, fileName: fileName);
       return true;
     } catch (e) {
       debugPrint('[ExcelService] Error generating Excel report: $e');
@@ -124,7 +133,15 @@ class ExcelService {
     }
   }
 
-  static Future<void> _shareOrOpenFile(File file, String? branchName) async {
+  static Future<void> _shareOrOpenFile(File file, String? branchName, {BuildContext? context, String? fileName}) async {
+    final actualFileName = fileName ?? file.path.split('/').last;
+    await ExportService.saveToDownloadsFolder(file, actualFileName);
+
+    if (context != null && context.mounted) {
+      ExportService.showExportOptionsModal(context, file, actualFileName);
+      return;
+    }
+
     try {
       if (Platform.isAndroid || Platform.isIOS) {
         try {
@@ -146,3 +163,4 @@ class ExcelService {
     }
   }
 }
+
